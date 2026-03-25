@@ -1,64 +1,46 @@
 import { useParams, Link } from 'react-router-dom';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { marked } from 'marked';
+import katexExt from 'marked-katex-extension';
 import SUBJECTS from '../data/studyData';
 import { getChapterContent } from '../data/chapterContent';
 
 // ============================================================
-// 策略：KaTeX 渲染阶段不碰 HTML，所以先剥离 HTML 块（用占位符保护），
-// marked 解析纯 Markdown → KaTeX 渲染公式 → 还原 HTML 块
+// 渲染策略
+// 1. 预处理：确保块级 LaTeX（$$...$$）格式正确：$$\ncontent\n$$
+//    marked-katex-extension 的 block tokenizer 要求 $$ 在独立一行
+// 2. marked.use() 应用 marked-katex-extension 处理 $ 和 $$ LaTeX
+// 3. HTML 块（details/summary）：marked 原生处理（输出原始 HTML，不转义）
+// 4. KaTeX auto-render 作为 fallback，处理漏网之鱼
 // ============================================================
 
-// 匹配块级 HTML 标签（<details>、<div>、<blockquote> 等）
-const BLOCK_HTML_RE = /<(details|div|blockquote|pre|figure|section|aside|article)[^>]*>[\s\S]*?<\/\1>|<hr\s*\/?>/gi;
-const HTML_PH = (n: number) => `\x00HTML${n}\x00`;
-
-// 保护 HTML 块（块级标签整体抽走，防止 KaTeX 误处理）
-function protectBlocks(text: string): { text: string; blocks: string[] } {
-  const blocks: string[] = [];
-  let i = 0;
-  const t = text.replace(BLOCK_HTML_RE, m => { blocks.push(m); return HTML_PH(i++); });
-  return { text: t, blocks };
-}
-function restoreBlocks(text: string, blocks: string[]): string {
-  let r = text;
-  for (let j = 0; j < blocks.length; j++) r = r.replace(HTML_PH(j), blocks[j]);
-  return r;
+// 预处理：把单行 $$formula$$ 转换为多行格式（marked-katex 的 block tokenizer 要求）
+function preprocessLatex(text: string): string {
+  // 匹配单行块级 LaTeX：$$ 内容（含一个或多个 \n 不换行）$$
+  // 替换为：$$\n内容\n$$
+  return text.replace(/\$\$([^\n$]+?)\$\$/g, (_, content) => `$$\n${content}\n$$`);
 }
 
-// markdown → HTML（marked 解析 Markdown，HTML 块已被保护，不会被转义）
+// 应用 marked-katex-extension（处理 inline 和 block LaTeX）
+marked.use(
+  (katexExt as any)({
+    throwOnError: false,
+    errorColor: '#cc0000',
+  })
+);
+
+// 全局 marked 配置
+marked.setOptions({
+  gfm: true,
+  breaks: false,
+});
+
+// ============================================================
+// markdown → HTML
+// ============================================================
 function markdownToHtml(rawMarkdown: string): string {
-  const { text: protected_, blocks } = protectBlocks(rawMarkdown);
-  const html = marked.parse(protected_) as string;
-  return restoreBlocks(html, blocks);
-}
-
-// ============================================================
-// KaTeX 渲染 hook（只作用于纯文本节点，不处理被保护的 HTML 块内容）
-// ============================================================
-function useKatex(contentRef: React.RefObject<HTMLElement | null>, deps: React.DependencyList) {
-  useEffect(() => {
-    if (!contentRef.current) return;
-    const el = contentRef.current;
-    const win = window as any;
-    if (win.katex && win.renderMathInElement) {
-      try {
-        win.renderMathInElement(el, {
-          delimiters: [
-            { left: '$$', right: '$$', display: true },
-            { left: '$', right: '$', display: false },
-            { left: '\\[', right: '\\]', display: true },
-            { left: '\\(', right: '\\)', display: false },
-          ],
-          throwOnError: false,
-          trust: false,
-          strict: false,
-          // 跳过 HTML 块标签内的文本节点（已由 restoreBlocks 还原为纯 HTML）
-          ignoredTags: ['style', 'script', 'textarea', 'pre', 'code'],
-        });
-      } catch (_) { /* ignore */ }
-    }
-  }, deps);
+  const processed = preprocessLatex(rawMarkdown);
+  return marked.parse(processed) as string;
 }
 
 // ============================================================
@@ -96,8 +78,28 @@ export default function ChapterPage() {
     buildContent();
   }, [buildContent]);
 
-  // KaTeX 渲染（内容插入 DOM 后触发）
-  useKatex(contentRef, [html]);
+  // KaTeX auto-render 作为 fallback，处理遗漏的公式
+  useEffect(() => {
+    if (!contentRef.current || !hasContent) return;
+    const win = window as any;
+    if (win.katex && win.renderMathInElement) {
+      try {
+        win.renderMathInElement(contentRef.current, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false },
+            { left: '\\[', right: '\\]', display: true },
+            { left: '\\(', right: '\\)', display: false },
+          ],
+          // 跳过 pre/code 标签（KaTeX 不应处理其中的 LaTeX）
+          ignoredTags: ['script', 'style', 'textarea', 'pre', 'code', 'kbd'],
+          throwOnError: false,
+          trust: false,
+          strict: false,
+        });
+      } catch (_) { /* ignore */ }
+    }
+  }, [html, hasContent]);
 
   if (!subject || !chapter) {
     return (
@@ -185,7 +187,6 @@ export default function ChapterPage() {
             <span className="breadcrumb-current">Ch{chapterNum} {chapter.title.split('：')[0]}</span>
           </div>
 
-          {/* Chapter header */}
           <div className="chapter-header-card animate-fade-up" style={{ borderColor: `${subject.color}33` }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
               <span style={{ padding: '0.25rem 0.75rem', borderRadius: 999, fontSize: '0.72rem', background: `${subject.color}18`, color: subject.accentColor, border: `1px solid ${subject.color}33` }}>

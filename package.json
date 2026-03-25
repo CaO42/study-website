@@ -15,6 +15,7 @@
     "@types/katex": "^0.16.8",
     "katex": "^0.16.42",
     "marked": "^17.0.5",
+    "marked-katex-extension": "^5.1.7",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
