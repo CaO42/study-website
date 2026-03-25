@@ -1,58 +1,33 @@
 import { useParams, Link } from 'react-router-dom';
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { marked } from 'marked';
 import katexExt from 'marked-katex-extension';
-import renderMathInElement from 'katex/contrib/auto-render';
 import SUBJECTS from '../data/studyData';
 import { getChapterContent } from '../data/chapterContent';
 
 // ============================================================
-// 渲染策略
-// 1. 预处理：确保块级 LaTeX（$$...$$）格式正确：$$\ncontent\n$$
-//    marked-katex-extension 的 block tokenizer 要求 $$ 在独立一行
-// 2. marked.use() 应用 marked-katex-extension 处理 $ 和 $$ LaTeX
-// 3. HTML 块（details/summary）：marked 原生处理（输出原始 HTML，不转义）
-// 4. KaTeX auto-render 作为 fallback，处理漏网之鱼
+// marked-katex-extension 负责所有 LaTeX 渲染（$...$ 和 $$...$$）
+// 无需 renderMathInElement，避免双重渲染
 // ============================================================
 
-// 预处理：把单行 $$formula$$ 转换为多行格式（marked-katex 的 block tokenizer 要求）
-function preprocessLatex(text: string): string {
-  // 匹配单行块级 LaTeX：$$ 内容（含一个或多个 \n 不换行）$$
-  // 替换为：$$\n内容\n$$
-  return text.replace(/\$\$([^\n$]+?)\$\$/g, (_, content) => `$$\n${content}\n$$`);
-}
-
-// 应用 marked-katex-extension（处理 inline 和 block LaTeX）
 marked.use(
   (katexExt as any)({
     throwOnError: false,
-    errorColor: '#cc0000',
+    displayMode: true,
   })
 );
 
-// 全局 marked 配置
-marked.setOptions({
-  gfm: true,
-  breaks: false,
-});
+marked.setOptions({ gfm: true, breaks: false });
 
-// ============================================================
-// markdown → HTML
-// ============================================================
 function markdownToHtml(rawMarkdown: string): string {
-  const processed = preprocessLatex(rawMarkdown);
-  return marked.parse(processed) as string;
+  return marked.parse(rawMarkdown) as string;
 }
 
-// ============================================================
-// ChapterPage 组件
-// ============================================================
 export default function ChapterPage() {
   const { slug, num } = useParams<{ slug: string; num: string }>();
   const [html, setHtml] = useState('');
   const [loading, setLoading] = useState(true);
   const [hasContent, setHasContent] = useState(false);
-  const contentRef = useRef<HTMLDivElement>(null);
 
   const subject = SUBJECTS.find(s => s.slug === slug);
   const chapterNum = parseInt(num || '1', 10);
@@ -62,8 +37,7 @@ export default function ChapterPage() {
     if (!subject || !chapter) return;
     const raw = getChapterContent(slug as string, chapterNum);
     if (raw) {
-      const h = markdownToHtml(raw);
-      setHtml(h);
+      setHtml(markdownToHtml(raw));
       setHasContent(true);
     } else {
       setHtml('');
@@ -78,25 +52,6 @@ export default function ChapterPage() {
     setHasContent(false);
     buildContent();
   }, [buildContent]);
-
-  // KaTeX auto-render，处理所有 LaTeX 公式
-  useEffect(() => {
-    if (!contentRef.current || !hasContent) return;
-    try {
-      renderMathInElement(contentRef.current, {
-        delimiters: [
-          { left: '$$', right: '$$', display: true },
-          { left: '$', right: '$', display: false },
-          { left: '\\[', right: '\\]', display: true },
-          { left: '\\(', right: '\\)', display: false },
-        ],
-        ignoredTags: ['script', 'style', 'textarea', 'pre', 'code', 'kbd'],
-        throwOnError: false,
-        trust: false,
-        strict: false,
-      });
-    } catch (_) { /* ignore */ }
-  }, [html, hasContent]);
 
   if (!subject || !chapter) {
     return (
@@ -184,6 +139,7 @@ export default function ChapterPage() {
             <span className="breadcrumb-current">Ch{chapterNum} {chapter.title.split('：')[0]}</span>
           </div>
 
+          {/* Chapter header */}
           <div className="chapter-header-card animate-fade-up" style={{ borderColor: `${subject.color}33` }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
               <span style={{ padding: '0.25rem 0.75rem', borderRadius: 999, fontSize: '0.72rem', background: `${subject.color}18`, color: subject.accentColor, border: `1px solid ${subject.color}33` }}>
@@ -228,11 +184,7 @@ export default function ChapterPage() {
               </div>
             )}
             {!loading && hasContent && (
-              <div
-                ref={contentRef}
-                className="prose-study"
-                dangerouslySetInnerHTML={{ __html: html }}
-              />
+              <div className="prose-study" dangerouslySetInnerHTML={{ __html: html }} />
             )}
             {!loading && !hasContent && (
               <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
