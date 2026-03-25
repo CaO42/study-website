@@ -1,220 +1,49 @@
 import { useParams, Link } from 'react-router-dom';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { marked } from 'marked';
 import SUBJECTS from '../data/studyData';
 import { getChapterContent } from '../data/chapterContent';
 
 // ============================================================
-// 渲染策略
-// 1. Markdown 语法（**bold** 等）：在 HTML 转义前先转换
-// 2. 原始 HTML 标签（<details>、<summary>）：原样保留，不转义
-// 3. LaTeX 公式（$$..$$ / $...$）：先抽走 → 再 HTML 转义 → 最后还原
+// 策略：KaTeX 渲染阶段不碰 HTML，所以先剥离 HTML 块（用占位符保护），
+// marked 解析纯 Markdown → KaTeX 渲染公式 → 还原 HTML 块
 // ============================================================
 
-function escHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+// 匹配块级 HTML 标签（<details>、<div>、<blockquote> 等）
+const BLOCK_HTML_RE = /<(details|div|blockquote|pre|figure|section|aside|article)[^>]*>[\s\S]*?<\/\1>|<hr\s*\/?>/gi;
+const HTML_PH = (n: number) => `\x00HTML${n}\x00`;
 
-// LaTeX 公式占位符
-const DISPLAY_RE = /\$\$[\s\S]+?\$\$/g;
-const INLINE_RE  = /(?<!\$)\$(?!\$)(?:\\.|[^\$\\])+?(?<!\$)\$(?!\$)/g;
-const DSP = (n: number) => `\x00DSP${n}\x00`;
-const INL = (n: number) => `\x00INL${n}\x00`;
-
-// 通用行内格式化（bold / italic / inline code / 删除线）
-// 调用时机：在 HTML 转义之前；LaTeX 已先被占位符替换掉
-function applyInlineFormat(text: string): string {
-  return text
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/_(.+?)_/g, '<em>$1</em>')
-    .replace(/~~(.+?)~~/g, '<del>$1</del>');
-}
-
-// 处理一行内的文本（LaTeX 保护 → 格式化 → HTML 转义 → LaTeX 还原）
-function processLine(text: string): string {
-  // 抽走 display LaTeX
-  const dsp: string[] = [];
-  let idx = 0;
-  const s1 = text.replace(DISPLAY_RE, m => { dsp.push(m); return DSP(idx++); });
-  // 抽走 inline LaTeX
-  const inl: string[] = [];
-  idx = 0;
-  const s2 = s1.replace(INLINE_RE, m => { inl.push(m); return INL(idx++); });
-  // 行内 Markdown 格式化（bold 等）
-  const formatted = applyInlineFormat(s2);
-  // HTML 转义
-  const escaped = escHtml(formatted);
-  // 还原 display LaTeX
-  let r = escaped;
-  for (let j = 0; j < dsp.length; j++) r = r.replace(DSP(j), dsp[j]);
-  // 还原 inline LaTeX
-  for (let j = 0; j < inl.length; j++) r = r.replace(INL(j), inl[j]);
-  return r;
-}
-
-// 整段 Markdown → HTML
-function markdownToHtml(text: string): string {
-  // 预处理：把原始 HTML 块（<details>...<summary>...</details>）整体抽出来保护
-  // 不让它被逐行解析打散
-  const htmlBlocks: string[] = [];
-  let processedText = text
-    .replace(/(<details[\s\S]*?<\/details>)/gi, m => {
-      htmlBlocks.push(m);
-      return `\x00HTML${htmlBlocks.length - 1}\x00`;
-    });
-
-  const lines = processedText.split('\n');
-  const out: string[] = [];
+// 保护 HTML 块（块级标签整体抽走，防止 KaTeX 误处理）
+function protectBlocks(text: string): { text: string; blocks: string[] } {
+  const blocks: string[] = [];
   let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const restoredLine = restoreHtml(line, htmlBlocks);
-
-    // 代码块
-    if (restoredLine.startsWith('```')) {
-      const lang = escHtml(restoredLine.slice(3).trim());
-      const code: string[] = [];
-      i++;
-      while (i < lines.length) {
-        const r = restoreHtml(lines[i], htmlBlocks);
-        if (r.startsWith('```')) { i++; break; }
-        code.push(escHtml(r));
-        i++;
-      }
-      const cls = lang ? ` class="language-${lang}"` : '';
-      out.push(`<pre><code${cls}>${code.join('\n')}</code></pre>`);
-      continue;
-    }
-
-    // 标题
-    if (restoredLine.startsWith('# '))  { out.push(`<h1>${processLine(restoredLine.slice(2))}</h1>`); i++; continue; }
-    if (restoredLine.startsWith('## ')) { out.push(`<h2>${processLine(restoredLine.slice(3))}</h2>`); i++; continue; }
-    if (restoredLine.startsWith('### ')){ out.push(`<h3>${processLine(restoredLine.slice(4))}</h3>`); i++; continue; }
-
-    // 水平线
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(restoredLine.trim())) { out.push('<hr/>'); i++; continue; }
-
-    // 引用（合并多行）
-    if (restoredLine.startsWith('> ')) {
-      const q: string[] = [];
-      while (i < lines.length && restoreHtml(lines[i], htmlBlocks).startsWith('> ')) {
-        q.push(processLine(restoreHtml(lines[i], htmlBlocks).slice(2)));
-        i++;
-      }
-      out.push(`<blockquote>${q.join('<br>')}</blockquote>`); continue;
-    }
-
-    // 无序列表
-    if (restoredLine.match(/^[-*+] /)) {
-      const items: string[] = [];
-      while (i < lines.length && restoreHtml(lines[i], htmlBlocks).match(/^[-*+] /)) {
-        items.push(`<li>${processLine(restoreHtml(lines[i], htmlBlocks).slice(2))}</li>`); i++;
-      }
-      out.push(`<ul>${items.join('')}</ul>`); continue;
-    }
-
-    // 有序列表
-    if (restoredLine.match(/^\d+\. /)) {
-      const items: string[] = [];
-      while (i < lines.length && restoreHtml(lines[i], htmlBlocks).match(/^\d+\. /)) {
-        items.push(`<li>${processLine(restoreHtml(lines[i], htmlBlocks).replace(/^\d+\. /, ''))}</li>`); i++;
-      }
-      out.push(`<ol>${items.join('')}</ol>`); continue;
-    }
-
-    // 表格
-    if (restoredLine.startsWith('|')) {
-      const tlines: string[] = [];
-      while (i < lines.length && restoreHtml(lines[i], htmlBlocks).startsWith('|')) {
-        tlines.push(restoreHtml(lines[i], htmlBlocks)); i++;
-      }
-      out.push(parseTable(tlines, htmlBlocks)); continue;
-    }
-
-    // 空行
-    if (restoredLine.trim() === '') { i++; continue; }
-
-    // 段落（收集连续非空行）
-    const paraLines: string[] = [];
-    while (
-      i < lines.length &&
-      restoreHtml(lines[i], htmlBlocks).trim() !== '' &&
-      !restoreHtml(lines[i], htmlBlocks).startsWith('#') &&
-      !restoreHtml(lines[i], htmlBlocks).startsWith('> ') &&
-      !restoreHtml(lines[i], htmlBlocks).startsWith('```') &&
-      !restoreHtml(lines[i], htmlBlocks).match(/^[-*+] /) &&
-      !restoreHtml(lines[i], htmlBlocks).match(/^\d+\. /) &&
-      !/^(-{3,}|\*{3,})$/.test(restoreHtml(lines[i], htmlBlocks)) &&
-      !restoreHtml(lines[i], htmlBlocks).startsWith('|')
-    ) { paraLines.push(restoreHtml(lines[i], htmlBlocks)); i++; }
-    if (paraLines.length) out.push(`<p>${paraLines.map(processLine).join('<br>')}</p>`);
-  }
-
-  return out.join('\n');
+  const t = text.replace(BLOCK_HTML_RE, m => { blocks.push(m); return HTML_PH(i++); });
+  return { text: t, blocks };
 }
-
-// 还原被保护的 HTML 块
-function restoreHtml(text: string, blocks: string[]): string {
+function restoreBlocks(text: string, blocks: string[]): string {
   let r = text;
-  for (let j = 0; j < blocks.length; j++) {
-    r = r.replace(`\x00HTML${j}\x00`, blocks[j]);
-  }
+  for (let j = 0; j < blocks.length; j++) r = r.replace(HTML_PH(j), blocks[j]);
   return r;
 }
 
-// 解析 Markdown 表格（表格行中可能含 LaTeX）
-function parseTable(lines: string[], htmlBlocks: string[]): string {
-  if (lines.length < 1) return '';
-  const restore = (t: string) => restoreHtml(t, htmlBlocks);
-  const headers = restore(lines[0]).split('|').filter((_, idx, a) => idx > 0 && idx < a.length - 1)
-    .map(h => `<th>${processLine(h.trim())}</th>`).join('');
-  let html = `<table><thead><tr>${headers}</tr></thead><tbody>`;
-  for (let r = 1; r < lines.length; r++) {
-    if (/^\|[-| :]+\|$/.test(restore(lines[r]))) continue;
-    const cells = restore(lines[r]).split('|').filter((_, idx, a) => idx > 0 && idx < a.length - 1)
-      .map(c => `<td>${processLine(c.trim())}</td>`).join('');
-    html += `<tr>${cells}</tr>`;
-  }
-  return html + '</tbody></table>';
+// markdown → HTML（marked 解析 Markdown，HTML 块已被保护，不会被转义）
+function markdownToHtml(rawMarkdown: string): string {
+  const { text: protected_, blocks } = protectBlocks(rawMarkdown);
+  const html = marked.parse(protected_) as string;
+  return restoreBlocks(html, blocks);
 }
 
 // ============================================================
-// ChapterPage 组件
+// KaTeX 渲染 hook（只作用于纯文本节点，不处理被保护的 HTML 块内容）
 // ============================================================
-export default function ChapterPage() {
-  const { slug, num } = useParams<{ slug: string; num: string }>();
-  const [htmlContent, setHtmlContent] = useState<string>('');
-  const [loading, setLoading] = useState(true);
-  const [hasContent, setHasContent] = useState(false);
-  const renderRef = useRef<HTMLDivElement>(null);
-
-  const subject = SUBJECTS.find(s => s.slug === slug);
-  const chapterNum = parseInt(num || '1', 10);
-  const chapter = subject?.chapters.find(c => c.number === chapterNum);
-
+function useKatex(contentRef: React.RefObject<HTMLElement | null>, deps: React.DependencyList) {
   useEffect(() => {
-    if (!subject || !chapter) { setLoading(false); return; }
-    setLoading(true);
-    setHasContent(false);
-    const raw = getChapterContent(slug as string, chapterNum);
-    if (raw) {
-      setHtmlContent(markdownToHtml(raw));
-      setHasContent(true);
-    } else {
-      setHtmlContent('');
-    }
-    setLoading(false);
-  }, [slug, chapterNum]);
-
-  // KaTeX 渲染（内容插入 DOM 后触发）
-  useEffect(() => {
-    if (!renderRef.current || !hasContent) return;
+    if (!contentRef.current) return;
+    const el = contentRef.current;
     const win = window as any;
-    if (win.renderMathInElement) {
+    if (win.katex && win.renderMathInElement) {
       try {
-        win.renderMathInElement(renderRef.current, {
+        win.renderMathInElement(el, {
           delimiters: [
             { left: '$$', right: '$$', display: true },
             { left: '$', right: '$', display: false },
@@ -222,12 +51,53 @@ export default function ChapterPage() {
             { left: '\\(', right: '\\)', display: false },
           ],
           throwOnError: false,
-          trust: true,
+          trust: false,
           strict: false,
+          // 跳过 HTML 块标签内的文本节点（已由 restoreBlocks 还原为纯 HTML）
+          ignoredTags: ['style', 'script', 'textarea', 'pre', 'code'],
         });
       } catch (_) { /* ignore */ }
     }
-  }, [htmlContent, hasContent]);
+  }, deps);
+}
+
+// ============================================================
+// ChapterPage 组件
+// ============================================================
+export default function ChapterPage() {
+  const { slug, num } = useParams<{ slug: string; num: string }>();
+  const [html, setHtml] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [hasContent, setHasContent] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const subject = SUBJECTS.find(s => s.slug === slug);
+  const chapterNum = parseInt(num || '1', 10);
+  const chapter = subject?.chapters.find(c => c.number === chapterNum);
+
+  const buildContent = useCallback(() => {
+    if (!subject || !chapter) return;
+    const raw = getChapterContent(slug as string, chapterNum);
+    if (raw) {
+      const h = markdownToHtml(raw);
+      setHtml(h);
+      setHasContent(true);
+    } else {
+      setHtml('');
+      setHasContent(false);
+    }
+    setLoading(false);
+  }, [slug, chapterNum, subject, chapter]);
+
+  useEffect(() => {
+    if (!subject || !chapter) { setLoading(false); return; }
+    setLoading(true);
+    setHasContent(false);
+    buildContent();
+  }, [buildContent]);
+
+  // KaTeX 渲染（内容插入 DOM 后触发）
+  useKatex(contentRef, [html]);
 
   if (!subject || !chapter) {
     return (
@@ -361,9 +231,9 @@ export default function ChapterPage() {
             )}
             {!loading && hasContent && (
               <div
-                ref={renderRef}
+                ref={contentRef}
                 className="prose-study"
-                dangerouslySetInnerHTML={{ __html: htmlContent }}
+                dangerouslySetInnerHTML={{ __html: html }}
               />
             )}
             {!loading && !hasContent && (

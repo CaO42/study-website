@@ -20,10 +20,11 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
     <!-- KaTeX（数学公式渲染）— jsDelivr CDN 国内可用 -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous" />
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNQCfrtkXoWj +Zu8NZp7bjHz5N6p4J8Q7xYfJ3cNRzP40oNJndr0" crossorigin="anonymous"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" integrity="sha384-2n1HHKD0LxZ4Upd4b6y3fZ8xSZ7Q1f0M0XhLkJzNkE5XvxC8C4Dd7wS5F6HQH5" crossorigin="anonymous"></script>
-  </head>
+    
+          <link rel="stylesheet" href="/katex/katex.min.css" />
+<script src="/katex/katex.min.js"></script>
+<script src="/katex/auto-render.min.js" onload="window.dispatchEvent(new Event('katex-ready'))"></script>
+</head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
