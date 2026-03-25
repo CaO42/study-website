@@ -1,0 +1,426 @@
+import { useParams, Link } from 'react-router-dom';
+import { useEffect, useState, useRef } from 'react';
+import SUBJECTS from '../data/studyData';
+import { getChapterContent } from '../data/chapterContent';
+
+// ============================================================
+// 渲染策略
+// 1. Markdown 语法（**bold** 等）：在 HTML 转义前先转换
+// 2. 原始 HTML 标签（<details>、<summary>）：原样保留，不转义
+// 3. LaTeX 公式（$$..$$ / $...$）：先抽走 → 再 HTML 转义 → 最后还原
+// ============================================================
+
+function escHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// LaTeX 公式占位符
+const DISPLAY_RE = /\$\$[\s\S]+?\$\$/g;
+const INLINE_RE  = /(?<!\$)\$(?!\$)(?:\\.|[^\$\\])+?(?<!\$)\$(?!\$)/g;
+const DSP = (n: number) => `\x00DSP${n}\x00`;
+const INL = (n: number) => `\x00INL${n}\x00`;
+
+// 通用行内格式化（bold / italic / inline code / 删除线）
+// 调用时机：在 HTML 转义之前；LaTeX 已先被占位符替换掉
+function applyInlineFormat(text: string): string {
+  return text
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/_(.+?)_/g, '<em>$1</em>')
+    .replace(/~~(.+?)~~/g, '<del>$1</del>');
+}
+
+// 处理一行内的文本（LaTeX 保护 → 格式化 → HTML 转义 → LaTeX 还原）
+function processLine(text: string): string {
+  // 抽走 display LaTeX
+  const dsp: string[] = [];
+  let idx = 0;
+  const s1 = text.replace(DISPLAY_RE, m => { dsp.push(m); return DSP(idx++); });
+  // 抽走 inline LaTeX
+  const inl: string[] = [];
+  idx = 0;
+  const s2 = s1.replace(INLINE_RE, m => { inl.push(m); return INL(idx++); });
+  // 行内 Markdown 格式化（bold 等）
+  const formatted = applyInlineFormat(s2);
+  // HTML 转义
+  const escaped = escHtml(formatted);
+  // 还原 display LaTeX
+  let r = escaped;
+  for (let j = 0; j < dsp.length; j++) r = r.replace(DSP(j), dsp[j]);
+  // 还原 inline LaTeX
+  for (let j = 0; j < inl.length; j++) r = r.replace(INL(j), inl[j]);
+  return r;
+}
+
+// 整段 Markdown → HTML
+function markdownToHtml(text: string): string {
+  // 预处理：把原始 HTML 块（<details>...<summary>...</details>）整体抽出来保护
+  // 不让它被逐行解析打散
+  const htmlBlocks: string[] = [];
+  let processedText = text
+    .replace(/(<details[\s\S]*?<\/details>)/gi, m => {
+      htmlBlocks.push(m);
+      return `\x00HTML${htmlBlocks.length - 1}\x00`;
+    });
+
+  const lines = processedText.split('\n');
+  const out: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const restoredLine = restoreHtml(line, htmlBlocks);
+
+    // 代码块
+    if (restoredLine.startsWith('```')) {
+      const lang = escHtml(restoredLine.slice(3).trim());
+      const code: string[] = [];
+      i++;
+      while (i < lines.length) {
+        const r = restoreHtml(lines[i], htmlBlocks);
+        if (r.startsWith('```')) { i++; break; }
+        code.push(escHtml(r));
+        i++;
+      }
+      const cls = lang ? ` class="language-${lang}"` : '';
+      out.push(`<pre><code${cls}>${code.join('\n')}</code></pre>`);
+      continue;
+    }
+
+    // 标题
+    if (restoredLine.startsWith('# '))  { out.push(`<h1>${processLine(restoredLine.slice(2))}</h1>`); i++; continue; }
+    if (restoredLine.startsWith('## ')) { out.push(`<h2>${processLine(restoredLine.slice(3))}</h2>`); i++; continue; }
+    if (restoredLine.startsWith('### ')){ out.push(`<h3>${processLine(restoredLine.slice(4))}</h3>`); i++; continue; }
+
+    // 水平线
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(restoredLine.trim())) { out.push('<hr/>'); i++; continue; }
+
+    // 引用（合并多行）
+    if (restoredLine.startsWith('> ')) {
+      const q: string[] = [];
+      while (i < lines.length && restoreHtml(lines[i], htmlBlocks).startsWith('> ')) {
+        q.push(processLine(restoreHtml(lines[i], htmlBlocks).slice(2)));
+        i++;
+      }
+      out.push(`<blockquote>${q.join('<br>')}</blockquote>`); continue;
+    }
+
+    // 无序列表
+    if (restoredLine.match(/^[-*+] /)) {
+      const items: string[] = [];
+      while (i < lines.length && restoreHtml(lines[i], htmlBlocks).match(/^[-*+] /)) {
+        items.push(`<li>${processLine(restoreHtml(lines[i], htmlBlocks).slice(2))}</li>`); i++;
+      }
+      out.push(`<ul>${items.join('')}</ul>`); continue;
+    }
+
+    // 有序列表
+    if (restoredLine.match(/^\d+\. /)) {
+      const items: string[] = [];
+      while (i < lines.length && restoreHtml(lines[i], htmlBlocks).match(/^\d+\. /)) {
+        items.push(`<li>${processLine(restoreHtml(lines[i], htmlBlocks).replace(/^\d+\. /, ''))}</li>`); i++;
+      }
+      out.push(`<ol>${items.join('')}</ol>`); continue;
+    }
+
+    // 表格
+    if (restoredLine.startsWith('|')) {
+      const tlines: string[] = [];
+      while (i < lines.length && restoreHtml(lines[i], htmlBlocks).startsWith('|')) {
+        tlines.push(restoreHtml(lines[i], htmlBlocks)); i++;
+      }
+      out.push(parseTable(tlines, htmlBlocks)); continue;
+    }
+
+    // 空行
+    if (restoredLine.trim() === '') { i++; continue; }
+
+    // 段落（收集连续非空行）
+    const paraLines: string[] = [];
+    while (
+      i < lines.length &&
+      restoreHtml(lines[i], htmlBlocks).trim() !== '' &&
+      !restoreHtml(lines[i], htmlBlocks).startsWith('#') &&
+      !restoreHtml(lines[i], htmlBlocks).startsWith('> ') &&
+      !restoreHtml(lines[i], htmlBlocks).startsWith('```') &&
+      !restoreHtml(lines[i], htmlBlocks).match(/^[-*+] /) &&
+      !restoreHtml(lines[i], htmlBlocks).match(/^\d+\. /) &&
+      !/^(-{3,}|\*{3,})$/.test(restoreHtml(lines[i], htmlBlocks)) &&
+      !restoreHtml(lines[i], htmlBlocks).startsWith('|')
+    ) { paraLines.push(restoreHtml(lines[i], htmlBlocks)); i++; }
+    if (paraLines.length) out.push(`<p>${paraLines.map(processLine).join('<br>')}</p>`);
+  }
+
+  return out.join('\n');
+}
+
+// 还原被保护的 HTML 块
+function restoreHtml(text: string, blocks: string[]): string {
+  let r = text;
+  for (let j = 0; j < blocks.length; j++) {
+    r = r.replace(`\x00HTML${j}\x00`, blocks[j]);
+  }
+  return r;
+}
+
+// 解析 Markdown 表格（表格行中可能含 LaTeX）
+function parseTable(lines: string[], htmlBlocks: string[]): string {
+  if (lines.length < 1) return '';
+  const restore = (t: string) => restoreHtml(t, htmlBlocks);
+  const headers = restore(lines[0]).split('|').filter((_, idx, a) => idx > 0 && idx < a.length - 1)
+    .map(h => `<th>${processLine(h.trim())}</th>`).join('');
+  let html = `<table><thead><tr>${headers}</tr></thead><tbody>`;
+  for (let r = 1; r < lines.length; r++) {
+    if (/^\|[-| :]+\|$/.test(restore(lines[r]))) continue;
+    const cells = restore(lines[r]).split('|').filter((_, idx, a) => idx > 0 && idx < a.length - 1)
+      .map(c => `<td>${processLine(c.trim())}</td>`).join('');
+    html += `<tr>${cells}</tr>`;
+  }
+  return html + '</tbody></table>';
+}
+
+// ============================================================
+// ChapterPage 组件
+// ============================================================
+export default function ChapterPage() {
+  const { slug, num } = useParams<{ slug: string; num: string }>();
+  const [htmlContent, setHtmlContent] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [hasContent, setHasContent] = useState(false);
+  const renderRef = useRef<HTMLDivElement>(null);
+
+  const subject = SUBJECTS.find(s => s.slug === slug);
+  const chapterNum = parseInt(num || '1', 10);
+  const chapter = subject?.chapters.find(c => c.number === chapterNum);
+
+  useEffect(() => {
+    if (!subject || !chapter) { setLoading(false); return; }
+    setLoading(true);
+    setHasContent(false);
+    const raw = getChapterContent(slug as string, chapterNum);
+    if (raw) {
+      setHtmlContent(markdownToHtml(raw));
+      setHasContent(true);
+    } else {
+      setHtmlContent('');
+    }
+    setLoading(false);
+  }, [slug, chapterNum]);
+
+  // KaTeX 渲染（内容插入 DOM 后触发）
+  useEffect(() => {
+    if (!renderRef.current || !hasContent) return;
+    const win = window as any;
+    if (win.renderMathInElement) {
+      try {
+        win.renderMathInElement(renderRef.current, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false },
+            { left: '\\[', right: '\\]', display: true },
+            { left: '\\(', right: '\\)', display: false },
+          ],
+          throwOnError: false,
+          trust: true,
+          strict: false,
+        });
+      } catch (_) { /* ignore */ }
+    }
+  }, [htmlContent, hasContent]);
+
+  if (!subject || !chapter) {
+    return (
+      <div style={{ maxWidth: 600, margin: '6rem auto', textAlign: 'center', padding: '0 2rem' }}>
+        <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔍</div>
+        <h2 style={{ color: '#f1f5f9', marginBottom: '0.5rem' }}>未找到该章节</h2>
+        <Link to="/" style={{ color: '#818cf8', textDecoration: 'none' }}>← 返回首页</Link>
+      </div>
+    );
+  }
+
+  const prevChapter = subject.chapters.find(c => c.number === chapterNum - 1);
+  const nextChapter = subject.chapters.find(c => c.number === chapterNum + 1);
+
+  return (
+    <div>
+      {/* Navbar */}
+      <nav className="navbar">
+        <div className="navbar-inner">
+          <Link to="/" className="navbar-logo">
+            <div className="navbar-logo-icon">{subject.emoji}</div>
+            <span>{subject.name}</span>
+          </Link>
+          <div className="navbar-links">
+            <Link to="/" className="navbar-link">首页</Link>
+            <Link to={`/subject/${subject.slug}`} className="navbar-link">{subject.name}</Link>
+            <Link to={`/subject/${subject.slug}/chapter/${chapterNum}`} className="navbar-link active">Ch{chapterNum}</Link>
+          </div>
+        </div>
+      </nav>
+
+      <div className="page-with-sidebar">
+        {/* Sidebar */}
+        <aside>
+          <div className="sidebar">
+            <div className="sidebar-header">
+              <span className="sidebar-emoji">{subject.emoji}</span>
+              <div>
+                <div className="sidebar-title">{subject.name}</div>
+                <div className="sidebar-label">章节导航</div>
+              </div>
+            </div>
+            <div className="sidebar-section">章节</div>
+            <nav className="sidebar-nav">
+              {subject.chapters.map(ch => {
+                const isActive = ch.number === chapterNum;
+                const isDone = ch.status === 'done';
+                return (
+                  <Link key={ch.number}
+                    to={ch.status !== 'locked' ? `/subject/${subject.slug}/chapter/${ch.number}` : '#'}
+                    onClick={e => ch.status === 'locked' && e.preventDefault()}
+                    className={`sidebar-item ${isActive ? 'active' : ''}`}
+                  >
+                    <span style={{ width: '1.2rem', textAlign: 'center', fontSize: '0.75rem', color: isDone ? '#4ade80' : isActive ? '#a5b4fc' : '#3a5070' }}>
+                      {isDone ? '✓' : ch.number}
+                    </span>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.78rem' }}>
+                      {ch.title.split('：')[0].replace(/第.章\s*/, '')}
+                    </span>
+                  </Link>
+                );
+              })}
+            </nav>
+            <div className="sidebar-section" style={{ marginTop: '1rem' }}>资源</div>
+            <nav>
+              {([
+                { label: '📚 教材', to: 'books' },
+                { label: '🌐 网站', to: 'websites' },
+                { label: '🎬 视频', to: 'videos' },
+                { label: '🗺️ 路径', to: 'roadmap' },
+              ] as const).map(r => (
+                <Link key={r.to} to={`/subject/${subject.slug}/resources/${r.to}`} className="sidebar-item">{r.label}</Link>
+              ))}
+            </nav>
+          </div>
+        </aside>
+
+        {/* Main */}
+        <main>
+          <div className="breadcrumb">
+            <Link to="/">首页</Link>
+            <span className="breadcrumb-sep">›</span>
+            <Link to={`/subject/${subject.slug}`}>{subject.name}</Link>
+            <span className="breadcrumb-sep">›</span>
+            <span className="breadcrumb-current">Ch{chapterNum} {chapter.title.split('：')[0]}</span>
+          </div>
+
+          {/* Chapter header */}
+          <div className="chapter-header-card animate-fade-up" style={{ borderColor: `${subject.color}33` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+              <span style={{ padding: '0.25rem 0.75rem', borderRadius: 999, fontSize: '0.72rem', background: `${subject.color}18`, color: subject.accentColor, border: `1px solid ${subject.color}33` }}>
+                第{chapterNum}章
+              </span>
+              {chapter.status === 'done' && (
+                <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.72rem', background: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)' }}>
+                  ✅ 已完成
+                </span>
+              )}
+            </div>
+            <h1 style={{ fontSize: '1.8rem', fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.02em', marginBottom: '0.5rem' }}>
+              {chapter.title}
+            </h1>
+            <p style={{ fontSize: '0.85rem', color: '#5a7394' }}>
+              ⏱ 预估学时 {chapter.hours}h &nbsp;·&nbsp; 📌 前置：{chapter.prerequisites.join('、')}
+            </p>
+            <div style={{ marginTop: '1.25rem' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#5a7394', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.6rem' }}>🎯 学习目标</div>
+              {chapter.objectives.map((obj, idx) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.4rem', fontSize: '0.875rem' }}>
+                  <span style={{ color: subject.accentColor, marginTop: '0.1rem', flexShrink: 0 }}>✓</span>
+                  <span style={{ color: '#8b9ab8' }}>{obj}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+              {chapter.practices.map((p, idx) => (
+                <span key={idx} style={{ padding: '0.2rem 0.65rem', borderRadius: 999, fontSize: '0.72rem', background: 'rgba(99,102,241,0.08)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.2)' }}>
+                  🔧 {p}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="content-card">
+            {loading && (
+              <div style={{ textAlign: 'center', padding: '5rem 0' }}>
+                <div className="spinner" />
+                <p style={{ marginTop: '1rem', color: '#5a7394', fontSize: '0.88rem' }}>加载中...</p>
+              </div>
+            )}
+            {!loading && hasContent && (
+              <div
+                ref={renderRef}
+                className="prose-study"
+                dangerouslySetInnerHTML={{ __html: htmlContent }}
+              />
+            )}
+            {!loading && !hasContent && (
+              <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
+                <div style={{ fontSize: '4rem', marginBottom: '1.5rem' }}>📖</div>
+                <h3 style={{ color: '#e8edf5', fontSize: '1.2rem', fontWeight: 700, marginBottom: '0.75rem' }}>{chapter.title}</h3>
+                <p style={{ color: '#5a7394', fontSize: '0.88rem', lineHeight: 1.7, maxWidth: 420, margin: '0 auto 2rem' }}>
+                  本章教程尚未生成。在 <strong style={{ color: '#a5b4fc' }}>OpenClaw</strong> 中说：
+                </p>
+                <div style={{ display: 'inline-block', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 10, padding: '0.75rem 1.5rem', fontFamily: 'monospace', fontSize: '0.9rem', color: '#a5b4fc', marginBottom: '2rem' }}>
+                  "生成 {subject.name} 第{chapterNum}章"
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', maxWidth: 560, margin: '0 auto', textAlign: 'left' }}>
+                  <div style={{ background: 'rgba(13,21,38,0.5)', border: '1px solid rgba(30,45,74,0.6)', borderRadius: 12, padding: '1rem' }}>
+                    <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#5a7394', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.6rem' }}>📚 核心概念</div>
+                    {chapter.concepts.map((c, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem', marginBottom: '0.3rem', fontSize: '0.8rem', color: '#8b9ab8' }}>
+                        <span style={{ color: subject.accentColor, marginTop: '0.05rem', flexShrink: 0 }}>▸</span>
+                        <span>{c}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ background: 'rgba(13,21,38,0.5)', border: '1px solid rgba(30,45,74,0.6)', borderRadius: 12, padding: '1rem' }}>
+                    <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#5a7394', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.6rem' }}>🔧 推荐练习</div>
+                    {chapter.practices.map((p, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem', marginBottom: '0.3rem', fontSize: '0.8rem', color: '#8b9ab8' }}>
+                        <span style={{ color: '#fb923c', marginTop: '0.05rem', flexShrink: 0 }}>🔧</span>
+                        <span>{p}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Navigation */}
+          {!loading && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+              {prevChapter ? (
+                <Link to={`/subject/${subject.slug}/chapter/${prevChapter.number}`} className="nav-btn">
+                  ← Ch{prevChapter.number} {prevChapter.title.split('：')[0]}
+                </Link>
+              ) : <div />}
+              {nextChapter && nextChapter.status !== 'locked' ? (
+                <Link to={`/subject/${subject.slug}/chapter/${nextChapter.number}`} className="nav-btn nav-btn-primary">
+                  Ch{nextChapter.number} {nextChapter.title.split('：')[0]} →
+                </Link>
+              ) : (
+                <Link to={`/subject/${subject.slug}`} className="nav-btn" style={{ background: 'rgba(34,197,94,0.08)', borderColor: 'rgba(34,197,94,0.2)', color: '#4ade80' }}>
+                  ✅ 返回学科概览
+                </Link>
+              )}
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
