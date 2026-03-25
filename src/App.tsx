@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import HomePage from './pages/HomePage';
 import SubjectPage from './pages/SubjectPage';
 import ChapterPage from './pages/ChapterPage';
@@ -6,7 +6,7 @@ import ResourcesPage from './pages/ResourcesPage';
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <div className="min-h-screen" style={{ background: 'var(--color-bg)' }}>
         {/* Navigation Bar */}
         <nav className="sticky top-0 z-50 border-b" style={{ borderColor: 'var(--color-border)', background: 'rgba(15,23,42,0.95)', backdropFilter: 'blur(12px)' }}>
@@ -39,6 +39,6 @@ export default function App() {
           </div>
         </footer>
       </div>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
