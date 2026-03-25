@@ -2,6 +2,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { marked } from 'marked';
 import katexExt from 'marked-katex-extension';
+import renderMathInElement from 'katex/contrib/auto-render';
 import SUBJECTS from '../data/studyData';
 import { getChapterContent } from '../data/chapterContent';
 
@@ -78,27 +79,23 @@ export default function ChapterPage() {
     buildContent();
   }, [buildContent]);
 
-  // KaTeX auto-render 作为 fallback，处理遗漏的公式
+  // KaTeX auto-render，处理所有 LaTeX 公式
   useEffect(() => {
     if (!contentRef.current || !hasContent) return;
-    const win = window as any;
-    if (win.katex && win.renderMathInElement) {
-      try {
-        win.renderMathInElement(contentRef.current, {
-          delimiters: [
-            { left: '$$', right: '$$', display: true },
-            { left: '$', right: '$', display: false },
-            { left: '\\[', right: '\\]', display: true },
-            { left: '\\(', right: '\\)', display: false },
-          ],
-          // 跳过 pre/code 标签（KaTeX 不应处理其中的 LaTeX）
-          ignoredTags: ['script', 'style', 'textarea', 'pre', 'code', 'kbd'],
-          throwOnError: false,
-          trust: false,
-          strict: false,
-        });
-      } catch (_) { /* ignore */ }
-    }
+    try {
+      renderMathInElement(contentRef.current, {
+        delimiters: [
+          { left: '$$', right: '$$', display: true },
+          { left: '$', right: '$', display: false },
+          { left: '\\[', right: '\\]', display: true },
+          { left: '\\(', right: '\\)', display: false },
+        ],
+        ignoredTags: ['script', 'style', 'textarea', 'pre', 'code', 'kbd'],
+        throwOnError: false,
+        trust: false,
+        strict: false,
+      });
+    } catch (_) { /* ignore */ }
   }, [html, hasContent]);
 
   if (!subject || !chapter) {
