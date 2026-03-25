@@ -80,9 +80,9 @@ $$z = |z|(\\cos\\theta + i\\sin\\theta)$$
 <details class="def-box" open>
 <summary>📖 定义 3：共轭复数</summary>
 
-复数 z = a + bi 的共轭：$$\\bar{z} = a - bi$$
+复数 z = a + bi 的共轭：$$\\overline{z} = a - bi$$
 
-核心性质：$$z \\cdot \\bar{z} = |z|^2 = a^2 + b^2$$
+核心性质：$$z \\cdot \\overline{z} = |z|^2 = a^2 + b^2$$
 
 几何意义：共轭复数关于实轴对称。
 
