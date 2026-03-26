@@ -1,26 +1,46 @@
 import { useParams, Link } from 'react-router-dom';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { marked } from 'marked';
-import katexExt from 'marked-katex-extension';
+import renderMathInElement from 'katex/contrib/auto-render';
 import SUBJECTS from '../data/studyData';
 import { getChapterContent } from '../data/chapterContent';
 
 // ============================================================
-// marked-katex-extension 负责所有 LaTeX 渲染（$...$ 和 $$...$$）
-// 无需 renderMathInElement，避免双重渲染
+// 渲染策略：
+// 1. 预处理剥离 $$...$$ 和 $...$ LaTeX 块（用占位符保护）
+// 2. marked.parse() 解析纯 Markdown（无 LaTeX 冲突）
+// 3. restoreLatex() 还原 LaTeX 文本
+// 4. renderMathInElement() 用 MathML 模式渲染公式
 // ============================================================
 
-marked.use(
-  (katexExt as any)({
-    throwOnError: false,
-    output: 'mathml',
-  })
-);
+const DISPLAY_RE = /\$\$[\s\S]+?\$\$/g;
+const INLINE_RE  = /(?<!\$)\$(?!\$)(?:\\.|[^$\\])+?(?<!\$)\$(?!\$)/g;
+const DSP = (n: number) => `\x00DSP${n}\x00`;
+const INL = (n: number) => `\x00INL${n}\x00`;
+
+function protectLatex(text: string): { text: string; display: string[]; inline: string[] } {
+  const display: string[] = [];
+  let i = 0;
+  let t = text.replace(DISPLAY_RE, m => { display.push(m); return DSP(i++); });
+  const inline: string[] = [];
+  i = 0;
+  t = t.replace(INLINE_RE, m => { inline.push(m); return INL(i++); });
+  return { text: t, display, inline };
+}
+
+function restoreLatex(text: string, display: string[], inline: string[]): string {
+  let r = text;
+  for (let j = 0; j < display.length; j++) r = r.replace(DSP(j), display[j]);
+  for (let j = 0; j < inline.length; j++) r = r.replace(INL(j), inline[j]);
+  return r;
+}
 
 marked.setOptions({ gfm: true, breaks: false });
 
 function markdownToHtml(rawMarkdown: string): string {
-  return marked.parse(rawMarkdown) as string;
+  const { text: protected_, display, inline } = protectLatex(rawMarkdown);
+  const html = marked.parse(protected_) as string;
+  return restoreLatex(html, display, inline);
 }
 
 export default function ChapterPage() {
@@ -28,6 +48,7 @@ export default function ChapterPage() {
   const [html, setHtml] = useState('');
   const [loading, setLoading] = useState(true);
   const [hasContent, setHasContent] = useState(false);
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   const subject = SUBJECTS.find(s => s.slug === slug);
   const chapterNum = parseInt(num || '1', 10);
@@ -52,6 +73,26 @@ export default function ChapterPage() {
     setHasContent(false);
     buildContent();
   }, [buildContent]);
+
+  // KaTeX MathML 渲染
+  useEffect(() => {
+    if (!contentRef.current || !hasContent) return;
+    try {
+      renderMathInElement(contentRef.current, {
+        delimiters: [
+          { left: '$$', right: '$$', display: true },
+          { left: '$', right: '$', display: false },
+          { left: '\\[', right: '\\]', display: true },
+          { left: '\\(', right: '\\)', display: false },
+        ],
+        output: 'mathml',
+        throwOnError: false,
+        trust: false,
+        strict: false,
+        ignoredTags: ['script', 'style', 'textarea', 'pre', 'code', 'kbd'],
+      });
+    } catch (_) { /* ignore */ }
+  }, [html, hasContent]);
 
   if (!subject || !chapter) {
     return (
@@ -184,7 +225,7 @@ export default function ChapterPage() {
               </div>
             )}
             {!loading && hasContent && (
-              <div className="prose-study" dangerouslySetInnerHTML={{ __html: html }} />
+              <div className="prose-study" ref={contentRef} dangerouslySetInnerHTML={{ __html: html }} />
             )}
             {!loading && !hasContent && (
               <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
