@@ -13,7 +13,7 @@ import { getChapterContent } from '../data/chapterContent';
 marked.use(
   (katexExt as any)({
     throwOnError: false,
-    displayMode: true,
+    output: 'html',
   })
 );
 
