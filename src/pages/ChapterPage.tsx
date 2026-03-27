@@ -42,7 +42,7 @@ function markdownToHtml(rawMarkdown: string): string {
   const html = marked.parse(protected_) as string;
   let result = restoreLatex(html, display, inline);
   // 修复已存储 HTML 中的 **bold** 语法（marked 不处理已渲染的 HTML 块）
-  result = result.replace(/\*\*(.+?)\\*\\*/g, (_, t) => `<strong>${t}</strong>`);
+  result = result.replace(/\*\*(.+?)\*\*/g, (_, t) => `<strong>${t}</strong>`);
   return result;
 }
 
