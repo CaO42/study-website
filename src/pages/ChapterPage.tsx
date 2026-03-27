@@ -281,24 +281,26 @@ export default function ChapterPage() {
                   ✅ 返回学科概览
                 </Link>
               )}
-
-            {/* 移动端底部固定章节导航 */}
-            <div className="chapter-nav-bar" style={{ display: 'none' }}>
-              {prevChapter ? (
-                <Link to={`/subject/${subject.slug}/chapter/${prevChapter.number}`} className="nav-btn">
-                  ← Ch{prevChapter.number}
-                </Link>
-              ) : <div />}
-              {nextChapter && nextChapter.status !== 'locked' ? (
-                <Link to={`/subject/${subject.slug}/chapter/${nextChapter.number}`} className="nav-btn nav-btn-primary">
-                  Ch{nextChapter.number} →
-                </Link>
-              ) : (
-                <Link to={`/subject/${subject.slug}`} className="nav-btn" style={{ background: 'rgba(34,197,94,0.08)', borderColor: 'rgba(34,197,94,0.2)', color: '#4ade80' }}>
-                  ← 章节列表
-                </Link>
-              )}
             </div>
+          )}
+
+          {/* 移动端底部固定章节导航 */}
+          <div className="chapter-nav-bar" style={{ display: 'none' }}>
+            {prevChapter ? (
+              <Link to={`/subject/${subject.slug}/chapter/${prevChapter.number}`} className="nav-btn">
+                ← Ch{prevChapter.number}
+              </Link>
+            ) : <div />}
+            {nextChapter && nextChapter.status !== 'locked' ? (
+              <Link to={`/subject/${subject.slug}/chapter/${nextChapter.number}`} className="nav-btn nav-btn-primary">
+                Ch{nextChapter.number} →
+              </Link>
+            ) : (
+              <Link to={`/subject/${subject.slug}`} className="nav-btn" style={{ background: 'rgba(34,197,94,0.08)', borderColor: 'rgba(34,197,94,0.2)', color: '#4ade80' }}>
+                ← 章节列表
+              </Link>
+            )}
+          </div>
         </main>
       </div>
     </div>
