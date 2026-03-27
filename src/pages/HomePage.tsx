@@ -71,7 +71,7 @@ export default function HomePage() {
             <div
               key={subject.slug}
               className="subject-card animate-fade-up"
-              style={{ animationDelay: `${idx * 0.12}s`, opacity: 0 }}
+              style={{ animationDelay: `${idx * 0.12}s` }}
             >
               {/* Colored glow bar */}
               <div style={{ height: '3px', background: `linear-gradient(90deg, ${subject.color}, ${subject.accentColor})` }} />
