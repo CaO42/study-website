@@ -74,8 +74,15 @@ export default function ChapterPage() {
     if (!subject || !chapter) { setLoading(false); return; }
     setLoading(true);
     setHasContent(false);
-    buildContent();
-  }, [buildContent]);
+    fetch(`/chapters/${encodeURIComponent(slug || '')}/chapter_${chapterNum}.md`)
+      .then(r => r.ok ? r.text() : null)
+      .then(md => {
+        if (md) { setHtml(markdownToHtml(md)); setHasContent(true); }
+        else buildContent();
+        setLoading(false);
+      })
+      .catch(() => { buildContent(); setLoading(false); });
+  }, [buildContent, slug, chapterNum]);
 
   // KaTeX MathML 渲染
   useEffect(() => {
