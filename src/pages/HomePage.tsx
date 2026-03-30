@@ -18,6 +18,7 @@ export default function HomePage() {
           <div className="navbar-links">
             <Link to="/" className="navbar-link active">首页</Link>
             <Link to="/subject/四元数与空间变换" className="navbar-link">四元数</Link>
+            <Link to="/subject/信号与系统" className="navbar-link">信号系统</Link>
             <Link to="/subject/数值分析" className="navbar-link">数值分析</Link>
             <Link to="/subject/基础物理仿真" className="navbar-link">物理仿真</Link>
           </div>
