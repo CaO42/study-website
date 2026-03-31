@@ -59,30 +59,41 @@ export default function ChapterPage() {
 
   const buildContent = useCallback(() => {
     if (!subject || !chapter) return;
-    const raw = getChapterContent(slug as string, chapterNum);
-    if (raw) {
-      setHtml(markdownToHtml(raw));
-      setHasContent(true);
-    } else {
-      setHtml('');
-      setHasContent(false);
-    }
+    setHtml('');
+    setHasContent(false);
     setLoading(false);
-  }, [slug, chapterNum, subject, chapter]);
+  }, [subject, chapter]);
 
   useEffect(() => {
     if (!subject || !chapter) { setLoading(false); return; }
     setLoading(true);
     setHasContent(false);
-    fetch(`/chapters/${encodeURIComponent(slug || '')}/chapter_${chapterNum}.md`)
+    setHtml('');
+
+    // 优先：静态章节数据
+    const raw = getChapterContent(slug as string, chapterNum);
+    if (raw) {
+      setHtml(markdownToHtml(raw));
+      setHasContent(true);
+      setLoading(false);
+      return;
+    }
+
+    // 其次：从 public/chapters/ 加载
+    const chapterPath = `/chapters/${encodeURIComponent(slug || '')}/chapter_${chapterNum}.md`;
+    fetch(chapterPath)
       .then(r => r.ok ? r.text() : null)
       .then(md => {
-        if (md) { setHtml(markdownToHtml(md)); setHasContent(true); }
-        else buildContent();
+        if (md) {
+          setHtml(markdownToHtml(md));
+          setHasContent(true);
+        } else {
+          buildContent();
+        }
         setLoading(false);
       })
       .catch(() => { buildContent(); setLoading(false); });
-  }, [buildContent, slug, chapterNum]);
+  }, [slug, chapterNum, subject, chapter, buildContent]);
 
   // KaTeX MathML 渲染
   useEffect(() => {
