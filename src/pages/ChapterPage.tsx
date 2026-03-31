@@ -59,10 +59,15 @@ export default function ChapterPage() {
 
   const buildContent = useCallback(() => {
     if (!subject || !chapter) return;
-    setHtml('');
-    setHasContent(false);
+    const raw = getChapterContent(slug as string, chapterNum);
+    if (raw) {
+      setHtml(markdownToHtml(raw));
+      setHasContent(true);
+    } else {
+      setHasContent(false);
+    }
     setLoading(false);
-  }, [subject, chapter]);
+  }, [subject, chapter, slug, chapterNum]);
 
   useEffect(() => {
     if (!subject || !chapter) { setLoading(false); return; }
